@@ -121,7 +121,7 @@ const std::set<std::string>& supported_model_types() {
     static const std::set<std::string> kSupported = {
         "albert", "bert",     "camembert",  "deberta", "deberta-v2",
         "distilbert", "electra", "roberta", "xlm-roberta", "modernbert",
-        "openai_privacy_filter"
+        "openai_privacy_filter", "pii_masking"
     };
     return kSupported;
 }
