@@ -47,11 +47,18 @@ else()
   set(_ort_ext "tgz")
   set(_ort_sha256 "547e40a48f1fe73e3f812d7c88a948612c23f896b91e4e2ee1e232d7b468246f")
 endif()
-FetchContent_Declare(onnxruntime
-  URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${_ort_pkg}.${_ort_ext}"
-  URL_HASH SHA256=${_ort_sha256})
-FetchContent_MakeAvailable(onnxruntime)
-set(ORT_ROOT "${onnxruntime_SOURCE_DIR}")
+# ORT_SERVER_ORT_ROOT points at an ONNX Runtime you built yourself (include/ + lib/),
+# e.g. a --minimal_build for a musl gateway; it replaces the Microsoft download.
+set(ORT_SERVER_ORT_ROOT "" CACHE PATH "Prebuilt ONNX Runtime root (include/, lib/); empty = download")
+if(ORT_SERVER_ORT_ROOT)
+  set(ORT_ROOT "${ORT_SERVER_ORT_ROOT}")
+else()
+  FetchContent_Declare(onnxruntime
+    URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${_ort_pkg}.${_ort_ext}"
+    URL_HASH SHA256=${_ort_sha256})
+  FetchContent_MakeAvailable(onnxruntime)
+  set(ORT_ROOT "${onnxruntime_SOURCE_DIR}")
+endif()
 
 # --- tokenizers-cpp (runtime HF tokenizer from tokenizer.json) -------------
 # Loads the model's own tokenizer.json (the exact HuggingFace tokenizer), so any
@@ -62,10 +69,22 @@ set(ORT_ROOT "${onnxruntime_SOURCE_DIR}")
 if(WIN32)
   set(TOKENIZERS_CPP_MSVC_RUNTIME_LIBRARY "MD" CACHE STRING "" FORCE)
 endif()
-FetchContent_Declare(tokenizers_cpp
-  GIT_REPOSITORY https://github.com/mlc-ai/tokenizers-cpp.git
-  GIT_TAG c586c52f93f7b060753bd2388eb96a105cb7374d)  # pinned main, 2026-07
-FetchContent_MakeAvailable(tokenizers_cpp)
+# ORT_SERVER_TOKENIZERS_C_LIB links a tokenizers C shim (libtokenizers_c.a) you built
+# for the target yourself, e.g. `cargo build --release --target x86_64-unknown-linux-musl`
+# in tokenizers-cpp/rust; tokenizers-cpp's own CMake has no musl target. It needs
+# ORT_SERVER_TOKENIZERS_CPP_SRC for include/tokenizers_c.h. Empty = build via cargo.
+set(ORT_SERVER_TOKENIZERS_C_LIB "" CACHE FILEPATH "Prebuilt libtokenizers_c.a; empty = build via cargo")
+set(ORT_SERVER_TOKENIZERS_CPP_SRC "" CACHE PATH "tokenizers-cpp checkout for the prebuilt shim's header")
+if(ORT_SERVER_TOKENIZERS_C_LIB)
+  add_library(tokenizers_cpp INTERFACE)
+  target_link_libraries(tokenizers_cpp INTERFACE "${ORT_SERVER_TOKENIZERS_C_LIB}" ${CMAKE_DL_LIBS} pthread)
+  set(tokenizers_cpp_SOURCE_DIR "${ORT_SERVER_TOKENIZERS_CPP_SRC}")
+else()
+  FetchContent_Declare(tokenizers_cpp
+    GIT_REPOSITORY https://github.com/mlc-ai/tokenizers-cpp.git
+    GIT_TAG c586c52f93f7b060753bd2388eb96a105cb7374d)  # pinned main, 2026-07
+  FetchContent_MakeAvailable(tokenizers_cpp)
+endif()
 
 # --- Target -----------------------------------------------------------------
 add_executable(ort-server src/main.cpp)

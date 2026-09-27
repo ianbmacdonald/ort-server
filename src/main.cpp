@@ -410,7 +410,15 @@ public:
 
         Ort::SessionOptions opts;
         opts.SetIntraOpNumThreads(0);
-        session_ = Ort::Session(env_, (dir / "model.onnx").c_str(), opts);
+        // A minimal ONNX Runtime build (--minimal_build, e.g. for a small musl
+        // gateway) loads only the ORT flatbuffer format; a full build loads either.
+        // model.ort wins when both are present.
+        fs::path model_file = dir / "model.onnx";
+        if (fs::exists(dir / "model.ort")) {
+            model_file = dir / "model.ort";
+            opts.AddConfigEntry("session.load_model_format", "ORT");
+        }
+        session_ = Ort::Session(env_, model_file.c_str(), opts);
 
         size_t n_in = session_.GetInputCount();
         for (size_t i = 0; i < n_in; ++i) {
