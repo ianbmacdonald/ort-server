@@ -48,11 +48,18 @@ else()
   set(_ort_ext "tgz")
   set(_ort_sha256 "547e40a48f1fe73e3f812d7c88a948612c23f896b91e4e2ee1e232d7b468246f")
 endif()
-FetchContent_Declare(onnxruntime
-  URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${_ort_pkg}.${_ort_ext}"
-  URL_HASH SHA256=${_ort_sha256})
-FetchContent_MakeAvailable(onnxruntime)
-set(ORT_ROOT "${onnxruntime_SOURCE_DIR}")
+# ORT_SERVER_ORT_ROOT points at an ONNX Runtime you built yourself (include/ + lib/),
+# e.g. a --minimal_build for a musl gateway; it replaces the Microsoft download.
+set(ORT_SERVER_ORT_ROOT "" CACHE PATH "Prebuilt ONNX Runtime root (include/, lib/); empty = download")
+if(ORT_SERVER_ORT_ROOT)
+  set(ORT_ROOT "${ORT_SERVER_ORT_ROOT}")
+else()
+  FetchContent_Declare(onnxruntime
+    URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${_ort_pkg}.${_ort_ext}"
+    URL_HASH SHA256=${_ort_sha256})
+  FetchContent_MakeAvailable(onnxruntime)
+  set(ORT_ROOT "${onnxruntime_SOURCE_DIR}")
+endif()
 
 # --- tokenizer FFI (runtime HF tokenizer from tokenizer.json) --------------
 # Loads the model's own tokenizer.json (the exact HuggingFace tokenizer), so any
@@ -83,8 +90,18 @@ set(TOK_FFI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tok_ffi")
 # Build under the binary dir so a configure-and-build never writes to the source
 # tree (and so a fresh build dir gets a fresh crate build).
 set(TOK_FFI_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/tok_ffi")
+# A Rust target triple for cross builds, e.g. x86_64-unknown-linux-musl. Crates
+# with C build scripts read CC_<triple> and AR_<triple> from the environment.
+set(ORT_SERVER_TOK_FFI_TARGET "" CACHE STRING "Rust target triple for tok_ffi; empty = host")
+if(ORT_SERVER_TOK_FFI_TARGET)
+  set(_tok_ffi_target_args --target "${ORT_SERVER_TOK_FFI_TARGET}")
+  set(_tok_ffi_out "${TOK_FFI_TARGET_DIR}/${ORT_SERVER_TOK_FFI_TARGET}/release")
+else()
+  set(_tok_ffi_target_args "")
+  set(_tok_ffi_out "${TOK_FFI_TARGET_DIR}/release")
+endif()
 set(TOK_FFI_LIB
-  "${TOK_FFI_TARGET_DIR}/release/${CMAKE_STATIC_LIBRARY_PREFIX}tok_ffi${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  "${_tok_ffi_out}/${CMAKE_STATIC_LIBRARY_PREFIX}tok_ffi${CMAKE_STATIC_LIBRARY_SUFFIX}")
 
 add_custom_command(
   OUTPUT "${TOK_FFI_LIB}"
@@ -94,7 +111,7 @@ add_custom_command(
   # binary.
   COMMAND "${CARGO_EXECUTABLE}" build --release --locked
           --manifest-path "${TOK_FFI_DIR}/Cargo.toml"
-          --target-dir "${TOK_FFI_TARGET_DIR}"
+          --target-dir "${TOK_FFI_TARGET_DIR}" ${_tok_ffi_target_args}
   # Cargo.lock belongs here: `cargo update` rewrites it without touching
   # Cargo.toml, and without this line the stale static library looks current.
   DEPENDS "${TOK_FFI_DIR}/src/lib.rs"
