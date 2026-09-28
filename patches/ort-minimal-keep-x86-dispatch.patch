@@ -1,0 +1,37 @@
+--- a/onnxruntime/core/mlas/lib/platform.cpp
++++ b/onnxruntime/core/mlas/lib/platform.cpp
+@@ -599,7 +599,7 @@
+                     this->QNBitGemmDispatch = &MlasSQNBitGemmDispatchAvx2vnni;
+                 }
+ 
+-#if !defined(ORT_MINIMAL_BUILD)
++#if !defined(ORT_MINIMAL_BUILD) || defined(MLAS_MINIMAL_BUILD_KEEP_X86_DISPATCH)
+ 
+                 //
+                 // Check if the processor supports AVX512F features and the
+--- a/onnxruntime/core/mlas/lib/convsym.cpp
++++ b/onnxruntime/core/mlas/lib/convsym.cpp
+@@ -195,7 +195,7 @@
+     false,                                  // FixupInputZeroPoint
+ };
+ 
+-#if !defined(ORT_MINIMAL_BUILD)
++#if !defined(ORT_MINIMAL_BUILD) || defined(MLAS_MINIMAL_BUILD_KEEP_X86_DISPATCH)
+ 
+ const MLAS_CONV_SYM_DISPATCH MlasConvSymDispatchAvx512Core = {
+     MlasConvSymKernelAvx512Core,
+--- a/onnxruntime/core/mlas/lib/mlasi.h
++++ b/onnxruntime/core/mlas/lib/mlasi.h
+@@ -17,6 +17,12 @@
+ 
+ #pragma once
+ 
++// Keep the runtime x86 ISA dispatch (AVX-512F/Core/VNNI, AVX-VNNI, AMX) in ORT_MINIMAL_BUILD builds.
++// Upstream compiles it out to save size; without it a minimal build runs AVX2 kernels on AVX-512 CPUs.
++#ifndef MLAS_MINIMAL_BUILD_KEEP_X86_DISPATCH
++#define MLAS_MINIMAL_BUILD_KEEP_X86_DISPATCH 1
++#endif
++
+ #include <algorithm>
+ #include <atomic>
+ #include <cmath>
