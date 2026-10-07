@@ -22,6 +22,8 @@ at build time).
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) © Yuji Hirose | MIT | `licenses/cpp-httplib-LICENSE` | Header-only, compiled in |
 | [nlohmann/json](https://github.com/nlohmann/json) © Niels Lohmann | MIT | `licenses/nlohmann-json-LICENSE` | Header-only, compiled in |
 | [stb_image](https://github.com/nothings/stb) v2.30 (commit 013ac3b) © Sean Barrett | MIT or public domain | `licenses/stb-LICENSE` | Vendored in `third_party/stb`, compiled in |
+| Rust crates of the tokenizers C shim (prplOS musl archives) | MIT / Apache-2.0 / others, per crate | `licenses/rust-crates.txt`, `licenses/rust/<crate>-<version>/` | Statically linked (via tokenizers-cpp) |
+| Rust standard library (prplOS musl archives) | MIT OR Apache-2.0 (libunwind: Apache-2.0 WITH LLVM-exception) | `licenses/rust-std/` | Statically linked (via tokenizers-cpp) |
 
 Exact dependency versions are pinned in `CMakeLists.txt` (SHA256 / commit
 SHAs) and recorded in `VERSIONS.md`.
