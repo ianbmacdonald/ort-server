@@ -19,3 +19,7 @@ not encoded in the `ort-server` version. See
 Tokenization uses [mlc-ai/tokenizers-cpp](https://github.com/mlc-ai/tokenizers-cpp)
 (loads the model's own `tokenizer.json` at runtime). The model graph is a plain
 ONNX export with no custom operators.
+
+Image decoding (`POST /classify/image`) uses `stb_image.h` v2.30, vendored unmodified in
+`third_party/stb` (nothings/stb commit 013ac3beddff3dbffafd5177e7972067cd2b5083; sha256 in
+`third_party/stb/README`).

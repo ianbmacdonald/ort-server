@@ -62,6 +62,7 @@ struct Manifest {
 
 constexpr long long kMaxTopK = 1000000;
 constexpr auto kAdmissionWait = std::chrono::seconds(30);
+constexpr auto kSocketTimeout = std::chrono::seconds(5);
 
 struct Args {
     std::string model_path;
@@ -81,7 +82,8 @@ const char* kUsage =
     "  image models: [--max-image-bytes N] [--max-image-pixels N] [--max-concurrent-decodes 1..2]\n"
     "                [--decode-budget-factor N] [--max-decode-bytes N] [--http-threads 2..16]";
 
-long long parse_int(const std::string& flag, const char* v) {
+// The range is checked on the parsed long long, before any narrowing cast.
+long long parse_int(const std::string& flag, const char* v, long long lo, long long hi) {
     size_t pos = 0;
     long long n = 0;
     try {
@@ -90,6 +92,9 @@ long long parse_int(const std::string& flag, const char* v) {
         pos = 0;
     }
     if (pos == 0 || v[pos] != '\0') throw std::runtime_error(flag + " needs an integer\n" + kUsage);
+    if (n < lo || n > hi) {
+        throw std::runtime_error(flag + " must be from " + std::to_string(lo) + " to " + std::to_string(hi));
+    }
     return n;
 }
 
@@ -99,41 +104,23 @@ Args parse_args(int argc, char** argv) {
         std::string f = argv[i];
         const bool has_value = i + 1 < argc;
         if (f == "--model-path" && has_value) a.model_path = argv[++i];
-        else if (f == "--port" && has_value) a.port = std::stoi(argv[++i]);
-        else if (f == "--threads" && has_value) a.threads = std::stoi(argv[++i]);
+        else if (f == "--port" && has_value) a.port = static_cast<int>(parse_int(f, argv[++i], 1, 65535));
+        else if (f == "--threads" && has_value) a.threads = static_cast<int>(parse_int(f, argv[++i], 0, 1024));
         else if (f == "--verbose") a.verbose = true;
-        else if (f == "--max-image-bytes" && has_value) a.max_image_bytes = parse_int(f, argv[++i]);
-        else if (f == "--max-image-pixels" && has_value) a.max_image_pixels = parse_int(f, argv[++i]);
-        else if (f == "--decode-budget-factor" && has_value) a.decode_budget_factor = parse_int(f, argv[++i]);
-        else if (f == "--max-decode-bytes" && has_value) a.max_decode_bytes = parse_int(f, argv[++i]);
-        else if (f == "--max-concurrent-decodes" && has_value) {
-            a.max_concurrent_decodes = static_cast<int>(parse_int(f, argv[++i]));
+        else if (f == "--max-image-bytes" && has_value) a.max_image_bytes = parse_int(f, argv[++i], 1024, 256ll << 20);
+        else if (f == "--max-image-pixels" && has_value) {
+            a.max_image_pixels = parse_int(f, argv[++i], 1, 16384ll * 16384);
+        } else if (f == "--decode-budget-factor" && has_value) {
+            a.decode_budget_factor = parse_int(f, argv[++i], 4, 64);
+        } else if (f == "--max-decode-bytes" && has_value) {
+            a.max_decode_bytes = parse_int(f, argv[++i], 16ll << 20, 4ll << 30);
+        } else if (f == "--max-concurrent-decodes" && has_value) {
+            a.max_concurrent_decodes = static_cast<int>(parse_int(f, argv[++i], 1, 2));
         } else if (f == "--http-threads" && has_value) {
-            a.http_threads = static_cast<int>(parse_int(f, argv[++i]));
+            a.http_threads = static_cast<int>(parse_int(f, argv[++i], 2, 16));
         }
     }
     if (a.model_path.empty() || a.port == 0) throw std::runtime_error(kUsage);
-    if (a.max_image_bytes < 1024 || a.max_image_bytes > (256ull << 20)) {
-        throw std::runtime_error("--max-image-bytes must be from 1024 to 268435456");
-    }
-    if (a.max_image_pixels < 1 || a.max_image_pixels > 16384ull * 16384ull) {
-        throw std::runtime_error("--max-image-pixels must be from 1 to 268435456");
-    }
-    if (a.decode_budget_factor < 4 || a.decode_budget_factor > 64) {
-        throw std::runtime_error("--decode-budget-factor must be from 4 to 64");
-    }
-    if (a.max_decode_bytes < (16ull << 20) || a.max_decode_bytes > (4ull << 30)) {
-        throw std::runtime_error("--max-decode-bytes must be from 16777216 to 4294967296");
-    }
-    if (a.max_concurrent_decodes < 1 || a.max_concurrent_decodes > 2) {
-        const int clamped = std::clamp(a.max_concurrent_decodes, 1, 2);
-        std::fprintf(stderr, "ort-server: --max-concurrent-decodes %d clamped to %d\n",
-                     a.max_concurrent_decodes, clamped);
-        a.max_concurrent_decodes = clamped;
-    }
-    if (a.http_threads < 2 || a.http_threads > 16) {
-        throw std::runtime_error("--http-threads must be from 2 to 16");
-    }
     return a;
 }
 
@@ -669,9 +656,15 @@ bool is_image_model(const fs::path& dir) {
     return j.is_object() && j.contains("task") && j["task"] == "image-classification";
 }
 
+// Error text can echo raw request bytes (nlohmann's parse errors quote the input), and the
+// default strict dump() throws on invalid UTF-8 inside the handler, which turns a 400 into a 500.
+std::string error_body(const std::string& message) {
+    return json{{"error", message}}.dump(-1, ' ', false, json::error_handler_t::replace);
+}
+
 void send_error(httplib::Response& res, int status, const std::string& message) {
     res.status = status;
-    res.set_content(json{{"error", message}}.dump(), "application/json");
+    res.set_content(error_body(message), "application/json");
 }
 
 // top_k follows Lemonade's /v1/classify rule: an integer from 1 to 1,000,000.
@@ -833,6 +826,9 @@ int main(int argc, char** argv) {
         }
 
         httplib::Server srv;
+        // Per-recv idle limits, not a cap on a request's total time.
+        srv.set_read_timeout(kSocketTimeout);
+        srv.set_write_timeout(kSocketTimeout);
         // Base64 inflates by 4/3; 64 KiB covers multipart headers and the JSON wrapper.
         const uint64_t max_body_bytes = args.max_image_bytes * 4 / 3 + (64u << 10);
         // Image requests read their body only after taking one of these, so
@@ -870,17 +866,17 @@ int main(int argc, char** argv) {
                 top_k = body.value("top_k", 0);
             } catch (const std::exception& e) {
                 res.status = 400;
-                res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+                res.set_content(error_body(e.what()), "application/json");
                 return;
             }
             try {
                 res.set_content(model.classify(text, top_k).dump(), "application/json");
             } catch (const InvalidInput& e) {
                 res.status = 400;  // the request is at fault, not the model
-                res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+                res.set_content(error_body(e.what()), "application/json");
             } catch (const std::exception& e) {
                 res.status = 500;
-                res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+                res.set_content(error_body(e.what()), "application/json");
             }
         });
         srv.Post("/classify/image", [&](const httplib::Request& req, httplib::Response& res,
