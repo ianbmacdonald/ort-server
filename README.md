@@ -24,7 +24,7 @@ float32 image input, one float32 probability output), `labels.txt` and the
 manifest; the manifest schema is tflite-server's, plus `"preprocess": {"layout":
 "NCHW"}` for models exported from PyTorch (`[1, 3, H, W]` input). A minimal ONNX
 Runtime build must include the image model's operators (Conv, Clip, ...); the
-BERT-family build cannot run it.
+curated build below does, the v0.1.x BERT-family build does not.
 
 ## Design
 
@@ -119,6 +119,12 @@ Usage: `ort-server --model-path <dir> --port <n> [--threads N] [--verbose]`; ima
 tflite-server's `--max-image-bytes`, `--max-image-pixels`, `--max-concurrent-decodes`,
 `--decode-budget-factor`, `--max-decode-bytes` and `--http-threads`, with its defaults.
 
+- `--max-concurrent-decodes N` must be 1 or 2 and `--http-threads N` from 2 to 16; any other
+  value, like any out-of-range or non-integer value of the other numeric options, is a startup
+  error (no clamping).
+- Socket timeouts: a connection that sends nothing for 5 s while a request is being read, or
+  accepts nothing for 5 s while a response is written, is closed (cpp-httplib's read and write
+  timeouts, set explicitly). It is a per-read idle limit, not a cap on a request's total time.
 - `--threads N`: number of CPU threads for inference (default: ONNX Runtime sizes its pool to
   the machine). Without it ONNX Runtime starts a worker per CPU it detects and pins each to its
   own CPU, ignoring a `taskset`/cpuset mask. With `--threads N` the session uses N intra-op
@@ -126,6 +132,26 @@ tflite-server's `--max-image-bytes`, `--max-image-pixels`, `--max-concurrent-dec
   so all stay inside the caller's CPU mask.
 
 CMake fetches ONNX Runtime, tokenizers-cpp, cpp-httplib, and nlohmann/json (see `CMakeLists.txt`). tokenizers-cpp builds a small Rust static lib, so **cargo/rustup must be on PATH** to build ort-server from source (build-time only — users of the prebuilt binary need nothing).
+
+## musl gateway builds: curated (default) or general
+
+The prplOS (musl) releases ship a minimal ONNX Runtime 1.30.0 shared library built with
+`tools/ort-musl-build.sh <x86_64|aarch64> <ops> <build-dir>` (ORT-format `model.ort` models only):
+
+- **curated** (the release default), `ops/curated.required_operators.config`: 60 operators, the
+  union of every model of the six use cases of the gateway study (text classification, sentence
+  embeddings, image classification incl. MobileNetV2, object detection, audio, time series; 17
+  models) and the v0.1.x BERT-family set (`ops/bertfamily.required_operators.config`: BERT,
+  DistilBERT, RoBERTa, DeBERTa v1/v2, ELECTRA, ALBERT, ModernBERT). A model needing another
+  operator fails to load and ONNX Runtime names the missing kernel.
+- **general**, `full` in place of the config: every ONNX and contrib operator and the ML ops; it
+  also loads `.onnx`.
+
+`tools/ort-ops-config.sh <dir>` converts your `.onnx` models and writes their config, to build
+for your own set. The server links against the library with `-DORT_SERVER_ORT_ROOT=<include/,lib/>`
+and a prebuilt musl tokenizer shim (`-DORT_SERVER_TOKENIZERS_C_LIB`). `ORT_SERVER_GC_SECTIONS`
+(default ON on Linux) compiles with `-ffunction-sections -fdata-sections` and links with
+`--gc-sections`.
 
 ## Releases
 
