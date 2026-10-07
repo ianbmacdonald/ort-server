@@ -137,6 +137,16 @@ target_link_libraries(ort_image PUBLIC nlohmann_json::nlohmann_json)
 
 add_executable(ort-server src/main.cpp src/image_model.cpp)
 add_dependencies(ort-server tok_ffi_build)
+# ORT_SERVER_GC_SECTIONS (GNU ld targets): -ffunction-sections -fdata-sections on the server and
+# --gc-sections at link, which mainly drops the unused parts of the Rust tokenizer static library.
+if(UNIX AND NOT APPLE)
+  option(ORT_SERVER_GC_SECTIONS "Compile with -ffunction-sections -fdata-sections and link with --gc-sections" ON)
+  if(ORT_SERVER_GC_SECTIONS)
+    target_compile_options(ort-server PRIVATE -ffunction-sections -fdata-sections)
+    target_compile_options(ort_image PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(ort-server PRIVATE -Wl,--gc-sections)
+  endif()
+endif()
 target_compile_definitions(ort-server PRIVATE
   ORT_SERVER_VERSION="${PROJECT_VERSION}"
   ORT_SERVER_ONNXRUNTIME_VERSION="${ONNXRUNTIME_VERSION}")
