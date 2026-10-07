@@ -103,6 +103,14 @@ cmake --build build --config Release
 ./build/ort-server --model-path <model-dir> --port 8100
 ```
 
+Usage: `ort-server --model-path <dir> --port <n> [--threads N] [--verbose]`
+
+- `--threads N`: number of CPU threads for inference (default: ONNX Runtime sizes its pool to
+  the machine). Without it ONNX Runtime starts a worker per CPU it detects and pins each to its
+  own CPU, ignoring a `taskset`/cpuset mask. With `--threads N` the session uses N intra-op
+  threads (the request thread plus N-1 workers) and one inter-op thread, and pins none of them,
+  so all stay inside the caller's CPU mask.
+
 CMake fetches ONNX Runtime, tokenizers-cpp, cpp-httplib, and nlohmann/json (see `CMakeLists.txt`). tokenizers-cpp builds a small Rust static lib, so **cargo/rustup must be on PATH** to build ort-server from source (build-time only — users of the prebuilt binary need nothing).
 
 ## Releases

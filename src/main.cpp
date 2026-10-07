@@ -55,6 +55,7 @@ struct Manifest {
 struct Args {
     std::string model_path;
     int port = 0;
+    int threads = 0;  // 0: ONNX Runtime sizes (and pins) its own pool
     bool verbose = false;
 };
 
@@ -64,10 +65,11 @@ Args parse_args(int argc, char** argv) {
         std::string f = argv[i];
         if (f == "--model-path" && i + 1 < argc) a.model_path = argv[++i];
         else if (f == "--port" && i + 1 < argc) a.port = std::stoi(argv[++i]);
+        else if (f == "--threads" && i + 1 < argc) a.threads = std::stoi(argv[++i]);
         else if (f == "--verbose") a.verbose = true;
     }
     if (a.model_path.empty() || a.port == 0) {
-        throw std::runtime_error("usage: ort-server --model-path <dir> --port <n> [--verbose]");
+        throw std::runtime_error("usage: ort-server --model-path <dir> --port <n> [--threads N] [--verbose]");
     }
     return a;
 }
@@ -361,7 +363,7 @@ void collect_inserted_special_ids(const json& pp, std::set<int64_t>& out) {
 
 class Model {
 public:
-    Model(const fs::path& dir, bool verbose)
+    Model(const fs::path& dir, int threads, bool verbose)
         : env_(ORT_LOGGING_LEVEL_WARNING, "ort-server"), manifest_(load_manifest(dir)) {
         (void)verbose;
         std::string blob = load_bytes(dir / "tokenizer.json");
@@ -409,7 +411,15 @@ public:
         }
 
         Ort::SessionOptions opts;
-        opts.SetIntraOpNumThreads(0);
+        if (threads > 0) {
+            // ORT pins intra-op workers to cores only when it sizes the pool
+            // itself (intra-op threads == 0); an explicit size keeps the
+            // workers inside the caller's taskset/cpuset.
+            opts.SetIntraOpNumThreads(threads);
+            opts.SetInterOpNumThreads(1);
+        } else {
+            opts.SetIntraOpNumThreads(0);
+        }
         // A minimal ONNX Runtime build (--minimal_build, e.g. for a small musl
         // gateway) loads only the ORT flatbuffer format; a full build loads either.
         // model.ort wins when both are present.
@@ -586,7 +596,7 @@ private:
 int main(int argc, char** argv) {
     try {
         Args args = parse_args(argc, argv);
-        Model model(args.model_path, args.verbose);
+        Model model(args.model_path, args.threads, args.verbose);
 
         httplib::Server srv;
         srv.Get("/health", [](const httplib::Request&, httplib::Response& res) {
