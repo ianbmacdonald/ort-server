@@ -15,6 +15,17 @@ work. Vision and audio models are **out of scope by design**: those modalities a
 served by other Lemonade backends (images → stable-diffusion.cpp; audio →
 whisper / moonshine / kokoro).
 
+The one exception is **image classification** (`POST /classify/image`), ported
+from [tflite-server](https://github.com/ianbmacdonald/tflite-server) with the same
+contract, decoder and preprocessing so LiteRT, ONNX Runtime and ExecuTorch can be
+compared on the same model and images. A model directory whose `manifest.json`
+says `"task": "image-classification"` holds `model.ort` or `model.onnx` (one
+float32 image input, one float32 probability output), `labels.txt` and the
+manifest; the manifest schema is tflite-server's, plus `"preprocess": {"layout":
+"NCHW"}` for models exported from PyTorch (`[1, 3, H, W]` input). A minimal ONNX
+Runtime build must include the image model's operators (Conv, Clip, ...); the
+BERT-family build cannot run it.
+
 ## Design
 
 The server is thin, and a model is easy to bring: **a stock Optimum export runs
@@ -78,6 +89,7 @@ error, and the model's output dimension must match `id2label` at inference time)
 |--------|------|------|----------|
 | GET | `/health` | — | `200` when the model is loaded and ready |
 | POST | `/classify` | `{"text": "...", "top_k": N?}` | `{"labels": {"<label>": <score in [0,1]>, ...}}` — `top_k` omitted or `0` returns all labels |
+| POST | `/classify/image` | multipart (`image` or `file` part, optional `top_k`) or `{"image": "<base64 or data: URL>", "top_k": N?}` | `{"predictions": [{"index", "label", "score"}], "labels": {...}, "input": {"width", "height"}, "timings": {...}}` (image models; tflite-server's contract, `400`/`413`/`503` on bad, oversized or busy requests) |
 
 Future capabilities (same server, new endpoints): `POST /embed`, `POST /rerank`.
 
@@ -103,7 +115,9 @@ cmake --build build --config Release
 ./build/ort-server --model-path <model-dir> --port 8100
 ```
 
-Usage: `ort-server --model-path <dir> --port <n> [--threads N] [--verbose]`
+Usage: `ort-server --model-path <dir> --port <n> [--threads N] [--verbose]`; image models also take
+tflite-server's `--max-image-bytes`, `--max-image-pixels`, `--max-concurrent-decodes`,
+`--decode-budget-factor`, `--max-decode-bytes` and `--http-threads`, with its defaults.
 
 - `--threads N`: number of CPU threads for inference (default: ONNX Runtime sizes its pool to
   the machine). Without it ONNX Runtime starts a worker per CPU it detects and pins each to its

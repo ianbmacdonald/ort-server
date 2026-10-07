@@ -4,18 +4,23 @@
 
 Covers: softmax/sigmoid normalization, manifest-less config.json inference,
 token-classification max/mean aggregation, truncation, top_k, request
-validation (400s), startup rejection of bad manifests, and the output-dim
-guard. Stdlib only, so it runs on any CI runner.
+validation (400s), startup rejection of bad manifests, the output-dim
+guard, and /classify/image on an NCHW image model. Stdlib only, so it runs on
+any CI runner.
 """
 
+import base64
 import json
+import math
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -39,6 +44,55 @@ def request(payload, raw=None):
             return e.code, {}
     except (urllib.error.URLError, OSError) as e:
         return 0, {"error": f"connection failed: {e}"}
+
+
+def image_request(body, ctype):
+    req = urllib.request.Request(
+        f"{BASE}/classify/image", data=body, headers={"Content-Type": ctype}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read())
+        except Exception:
+            return e.code, {}
+    except (urllib.error.URLError, OSError) as e:
+        return 0, {"error": f"connection failed: {e}"}
+
+
+def multipart(parts):
+    boundary = "ortsmokeboundary"
+    out = b""
+    for name, data, is_file in parts:
+        filename = '; filename="x"' if is_file else ""
+        out += (
+            f"--{boundary}\r\nContent-Disposition: form-data; "
+            f'name="{name}"{filename}\r\n\r\n'
+        ).encode()
+        out += data + b"\r\n"
+    out += f"--{boundary}--\r\n".encode()
+    return out, f"multipart/form-data; boundary={boundary}"
+
+
+def png_rgb(pixels, width, height):
+    raw = b"".join(
+        b"\x00" + bytes(v for px in pixels[y * width : (y + 1) * width] for v in px)
+        for y in range(height)
+    )
+
+    def chunk(kind, data):
+        crc = zlib.crc32(kind + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", crc)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
 
 
 class Server:
@@ -317,6 +371,63 @@ def main():
         check("I: dim-mismatch server ready", s.wait_ready())
         st, body = request({"text": "hi"})
         check("I: mismatch is 500 with error", st == 500 and "error" in body, str(body))
+
+    # J: image classification. tiny-image returns softmax of the per-channel
+    # means of its NCHW input; a 4x4 PNG is not resized, so the expected
+    # scores follow from the pixels, and a wrong HWC->CHW transpose mixes them.
+    img = HERE / "fixtures" / "tiny-image"
+    pixels = [(16 * i + 5, 255 - 16 * i, (37 * i) % 256) for i in range(16)]
+    png = png_rgb(pixels, 4, 4)
+    means = [sum((p[c] - 127.5) / 127.5 for p in pixels) / 16 for c in range(3)]
+    exps = [math.exp(m - max(means)) for m in means]
+    expected = [e / sum(exps) for e in exps]
+    with Server(binary, img) as s:
+        check("J: image server ready", s.wait_ready())
+        st, body = image_request(*multipart([("image", png, True), ("top_k", b"3", False)]))
+        got = {p["index"]: p["score"] for p in body.get("predictions", [])}
+        check(
+            "J: NCHW scores match the per-channel means",
+            st == 200
+            and len(got) == 3
+            and all(abs(got[i] - expected[i]) < 1e-5 for i in range(3)),
+            f"{body} != {expected}",
+        )
+        check(
+            "J: input size reported",
+            body.get("input") == {"width": 4, "height": 4},
+            str(body.get("input")),
+        )
+        st, body = image_request(
+            json.dumps({"image": base64.b64encode(png).decode()}).encode(),
+            "application/json",
+        )
+        check(
+            "J: JSON base64 uses top_k_default (2)",
+            st == 200 and len(body.get("predictions", [])) == 2,
+            str(body),
+        )
+        st, _ = image_request(*multipart([("image", b"not an image", True)]))
+        check("J: non-image bytes are 400", st == 400)
+        st, _ = image_request(*multipart([("image", png, True), ("top_k", b"0", False)]))
+        check("J: top_k=0 is 400", st == 400)
+        st, _ = image_request(b'{"image": "!!!!"}', "application/json")
+        check("J: invalid base64 is 400", st == 400)
+        st, _ = request({"text": "hello"})
+        check("J: /classify on an image model is 400", st == 400)
+    with Server(binary, clf) as s:
+        check("J: text server ready", s.wait_ready())
+        st, _ = image_request(*multipart([("image", png, True)]))
+        check("J: /classify/image on a text model is 400", st == 400)
+
+    # K: the manifest layout must match the model input
+    nhwc = variant(img, tmp, "nhwc")
+    m = json.loads((nhwc / "manifest.json").read_text())
+    m["preprocess"]["layout"] = "NHWC"
+    (nhwc / "manifest.json").write_text(json.dumps(m))
+    with Server(binary, nhwc) as s:
+        ready = s.wait_ready(timeout=10)
+        out = s.stop()
+        check("K: NHWC manifest on an NCHW model rejected", not ready, out[-200:])
 
     shutil.rmtree(tmp, ignore_errors=True)
     if FAILURES:

@@ -21,6 +21,7 @@ at build time).
 | [msgpack-cxx](https://github.com/msgpack/msgpack-c) © msgpack contributors | BSL-1.0 | `licenses/msgpack-LICENSE` | Header-only, compiled in (via tokenizers-cpp) |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) © Yuji Hirose | MIT | `licenses/cpp-httplib-LICENSE` | Header-only, compiled in |
 | [nlohmann/json](https://github.com/nlohmann/json) © Niels Lohmann | MIT | `licenses/nlohmann-json-LICENSE` | Header-only, compiled in |
+| [stb_image](https://github.com/nothings/stb) © Sean Barrett | MIT or public domain | `licenses/stb-LICENSE` | Vendored in `third_party/stb`, compiled in |
 
 Exact dependency versions are pinned in `CMakeLists.txt` (SHA256 / commit
 SHAs) and recorded in `VERSIONS.md`.

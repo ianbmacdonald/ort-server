@@ -87,7 +87,19 @@ else()
 endif()
 
 # --- Target -----------------------------------------------------------------
-add_executable(ort-server src/main.cpp)
+find_package(Threads REQUIRED)
+
+# Image decode, resize and manifest parsing (no ONNX Runtime dependency); the
+# same sources as tflite-server's, with stb_image compiled once in stb_image_impl.cpp.
+add_library(ort_image STATIC
+  src/flat_json.cpp
+  src/image_manifest.cpp
+  src/image_preprocess.cpp
+  src/stb_image_impl.cpp)
+target_include_directories(ort_image PUBLIC src third_party/stb)
+target_link_libraries(ort_image PUBLIC nlohmann_json::nlohmann_json)
+
+add_executable(ort-server src/main.cpp src/image_model.cpp)
 target_compile_definitions(ort-server PRIVATE
   ORT_SERVER_ONNXRUNTIME_VERSION="${ONNXRUNTIME_VERSION}")
 target_include_directories(ort-server PRIVATE
@@ -96,7 +108,9 @@ target_include_directories(ort-server PRIVATE
 target_link_libraries(ort-server PRIVATE
   httplib::httplib
   nlohmann_json::nlohmann_json
-  tokenizers_cpp)
+  tokenizers_cpp
+  ort_image
+  Threads::Threads)
 
 if(WIN32)
   target_link_libraries(ort-server PRIVATE "${ORT_ROOT}/lib/onnxruntime.lib")
