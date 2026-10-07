@@ -1,0 +1,12 @@
+{
+  "task": "image-classification",
+  "labels_file": "labels.txt",
+  "score_normalization": "none",
+  "top_k_default": 2,
+  "preprocess": {
+    "resize": "stretch",
+    "mean": 127.5,
+    "std": 127.5,
+    "layout": "NCHW"
+  }
+}
