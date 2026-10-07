@@ -17,13 +17,16 @@ at build time).
 | [nlohmann/json](https://github.com/nlohmann/json) © Niels Lohmann | MIT | `licenses/nlohmann-json-LICENSE` | Header-only, compiled in |
 | [stb_image](https://github.com/nothings/stb) v2.30 (commit 013ac3b) © Sean Barrett | MIT or public domain | `licenses/stb-LICENSE` | Vendored in `third_party/stb`, compiled in |
 | Rust crates reached through `third_party/tok_ffi` (80 in `Cargo.lock`, including the tokenizer crates named above) | MIT / Apache-2.0 / Unicode-3.0 | `licenses/rust-crates-NOTICES.html` | Statically linked; **generated** per release from `Cargo.lock` |
+| Rust standard library (prplOS musl archives) | MIT OR Apache-2.0 (libunwind: Apache-2.0 WITH LLVM-exception) | `licenses/rust-std/` | Statically linked (via `third_party/tok_ffi`) |
 
-The last row is a count rather than a list because it is generated at release
+The crates row is a count rather than a list because it is generated at release
 time from `Cargo.lock`: `licenses/rust-crates-NOTICES.html` in the archive is
 the authoritative list of those crates and carries their full license texts. The
 release job will not package an archive without it, and fails outright if a
 dependency arrives under a license this project has not accepted. The accepted
-set lives in `third_party/tok_ffi/about.toml` and `deny.toml`.
+set lives in `third_party/tok_ffi/about.toml` and `deny.toml`. The prplOS musl
+archives (`tools/package-musl.sh`) carry the per-crate texts as
+`licenses/rust-crates.txt` and `licenses/rust/<crate>-<version>/` instead.
 
 Exact dependency versions are pinned in `CMakeLists.txt` (SHA256 / commit
 SHAs) and recorded in `VERSIONS.md`; the Rust side is pinned in
