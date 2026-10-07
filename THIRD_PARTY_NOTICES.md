@@ -15,7 +15,7 @@ at build time).
 | [esaxx](https://github.com/hillbig/esaxx) © Daisuke Okanohara | MIT | `licenses/esaxx-LICENSE` | Statically linked (vendored by the `esaxx-rs` crate) |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) © Yuji Hirose | MIT | `licenses/cpp-httplib-LICENSE` | Header-only, compiled in |
 | [nlohmann/json](https://github.com/nlohmann/json) © Niels Lohmann | MIT | `licenses/nlohmann-json-LICENSE` | Header-only, compiled in |
-| [stb_image](https://github.com/nothings/stb) © Sean Barrett | MIT or public domain | `licenses/stb-LICENSE` | Vendored in `third_party/stb`, compiled in |
+| [stb_image](https://github.com/nothings/stb) v2.30 (commit 013ac3b) © Sean Barrett | MIT or public domain | `licenses/stb-LICENSE` | Vendored in `third_party/stb`, compiled in |
 | Rust crates reached through `third_party/tok_ffi` (80 in `Cargo.lock`, including the tokenizer crates named above) | MIT / Apache-2.0 / Unicode-3.0 | `licenses/rust-crates-NOTICES.html` | Statically linked; **generated** per release from `Cargo.lock` |
 
 The last row is a count rather than a list because it is generated at release

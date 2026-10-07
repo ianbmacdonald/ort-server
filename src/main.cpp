@@ -115,6 +115,7 @@ struct LimitOverrides {
 
 constexpr long long kMaxTopK = 1000000;
 constexpr auto kAdmissionWait = std::chrono::seconds(30);
+constexpr auto kSocketTimeout = std::chrono::seconds(5);
 
 struct Args {
     std::string model_path;
@@ -1294,9 +1295,15 @@ bool is_image_model(const fs::path& dir) {
     return j.is_object() && j.contains("task") && j["task"] == "image-classification";
 }
 
+// Error text can echo raw request bytes (nlohmann's parse errors quote the input), and the
+// default strict dump() throws on invalid UTF-8 inside the handler, which turns a 400 into a 500.
+std::string error_body(const std::string& message) {
+    return json{{"error", message}}.dump(-1, ' ', false, json::error_handler_t::replace);
+}
+
 void send_error(httplib::Response& res, int status, const std::string& message) {
     res.status = status;
-    res.set_content(json{{"error", message}}.dump(), "application/json");
+    res.set_content(error_body(message), "application/json");
 }
 
 // top_k follows Lemonade's /v1/classify rule: an integer from 1 to 1,000,000.
@@ -1458,6 +1465,9 @@ int main(int argc, char** argv) {
         }
 
         httplib::Server srv;
+        // Per-recv idle limits, not a cap on a request's total time.
+        srv.set_read_timeout(kSocketTimeout);
+        srv.set_write_timeout(kSocketTimeout);
         // Base64 inflates by 4/3; 64 KiB covers multipart headers and the JSON wrapper.
         const uint64_t max_body_bytes = args.max_image_bytes * 4 / 3 + (64u << 10);
         // Image requests read their body only after taking one of these, so
@@ -1511,7 +1521,7 @@ int main(int argc, char** argv) {
                 }
             } catch (const std::exception& e) {
                 res.status = 400;
-                res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+                res.set_content(error_body(e.what()), "application/json");
                 return;
             }
             try {
@@ -1519,10 +1529,10 @@ int main(int argc, char** argv) {
                 res.set_content(out.dump(), "application/json");
             } catch (const InvalidInput& e) {
                 res.status = 400;  // the request is at fault, not the model
-                res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+                res.set_content(error_body(e.what()), "application/json");
             } catch (const std::exception& e) {
                 res.status = 500;
-                res.set_content(json{{"error", e.what()}}.dump(), "application/json");
+                res.set_content(error_body(e.what()), "application/json");
             }
         });
         srv.Post("/classify/image", [&](const httplib::Request& req, httplib::Response& res,
