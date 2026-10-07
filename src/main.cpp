@@ -108,6 +108,7 @@ struct LimitOverrides {
 struct Args {
     std::string model_path;
     int port = 0;
+    int threads = 0;  // 0: ONNX Runtime sizes (and pins) its own pool
     bool verbose = false;
     LimitOverrides limits;
 };
@@ -131,7 +132,7 @@ long long positive_arg(const std::string& flag, const char* raw,
 }
 
 constexpr const char* kUsage =
-    "usage: ort-server --model-path <dir> --port <n> [--verbose]\n"
+    "usage: ort-server --model-path <dir> --port <n> [--threads N] [--verbose]\n"
     "       [--max-length <n>] [--max-labels <n>] [--max-label-chars <n>]\n"
     "       [--max-grid-cells <n>]\n"
     "  --max-length sets a zero-shot-classification model's window; on any other\n"
@@ -152,6 +153,7 @@ Args parse_args(int argc, char** argv) {
         };
         if (f == "--model-path") a.model_path = value();
         else if (f == "--port") a.port = static_cast<int>(positive_arg(f, value(), 65535));
+        else if (f == "--threads") a.threads = static_cast<int>(positive_arg(f, value(), 1024));
         else if (f == "--verbose") a.verbose = true;
         else if (f == "--max-length")
             a.limits.max_length = static_cast<int>(
@@ -689,7 +691,7 @@ size_t tail_chars_for(const Encoded& t, size_t budget, size_t total_chars) {
 
 class Model {
 public:
-    Model(const fs::path& dir, bool verbose, const LimitOverrides& cli = {})
+    Model(const fs::path& dir, int threads, bool verbose, const LimitOverrides& cli = {})
         : env_(ORT_LOGGING_LEVEL_WARNING, "ort-server"), verbose_(verbose) {
         std::string blob = load_bytes(dir / "tokenizer.json");
 
@@ -763,7 +765,15 @@ public:
         }
 
         Ort::SessionOptions opts;
-        opts.SetIntraOpNumThreads(0);
+        if (threads > 0) {
+            // ORT pins intra-op workers to cores only when it sizes the pool
+            // itself (intra-op threads == 0); an explicit size keeps the
+            // workers inside the caller's taskset/cpuset.
+            opts.SetIntraOpNumThreads(threads);
+            opts.SetInterOpNumThreads(1);
+        } else {
+            opts.SetIntraOpNumThreads(0);
+        }
         // A minimal ONNX Runtime build (--minimal_build, e.g. for a small musl
         // gateway) loads only the ORT flatbuffer format; a full build loads either.
         // model.ort wins when both are present.
@@ -1243,7 +1253,7 @@ private:
 int main(int argc, char** argv) {
     try {
         Args args = parse_args(argc, argv);
-        Model model(args.model_path, args.verbose, args.limits);
+        Model model(args.model_path, args.threads, args.verbose, args.limits);
 
         httplib::Server srv;
         srv.Get("/health", [](const httplib::Request&, httplib::Response& res) {
