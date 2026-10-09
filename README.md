@@ -88,7 +88,7 @@ error, and the model's output dimension must match `id2label` at inference time)
 | Method | Path | Body | Response |
 |--------|------|------|----------|
 | GET | `/health` | — | `200` when the model is loaded and ready |
-| POST | `/classify` | `{"text": "...", "top_k": N?}` | `{"labels": {"<label>": <score in [0,1]>, ...}}` — `top_k` omitted or `0` returns all labels |
+| POST | `/classify` | `{"text": "...", "top_k": N?}` | `{"labels": {"<label>": <score in [0,1]>, ...}}` — `top_k` omitted or `0` returns all labels; a body over 64 KiB is `413` |
 | POST | `/classify/image` | multipart (`image` or `file` part, optional `top_k`) or `{"image": "<base64 or data: URL>", "top_k": N?}` | `{"predictions": [{"index", "label", "score"}], "labels": {...}, "input": {"width", "height"}, "timings": {...}}` (image models; tflite-server's contract, `400`/`413`/`503` on bad, oversized or busy requests) |
 
 Future capabilities (same server, new endpoints): `POST /embed`, `POST /rerank`.

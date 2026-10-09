@@ -63,6 +63,9 @@ struct Manifest {
 constexpr long long kMaxTopK = 1000000;
 constexpr auto kAdmissionWait = std::chrono::seconds(30);
 constexpr auto kSocketTimeout = std::chrono::seconds(5);
+// Text request body cap: cpp-httplib's default is unlimited, and the whole body is
+// buffered before the handler runs. The token window is 512, so 64 KiB is ample.
+constexpr size_t kPayloadMax = 64 * 1024;
 
 struct Args {
     std::string model_path;
@@ -101,24 +104,26 @@ long long parse_int(const std::string& flag, const char* v, long long lo, long l
 Args parse_args(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
-        std::string f = argv[i];
-        const bool has_value = i + 1 < argc;
-        if (f == "--model-path" && has_value) a.model_path = argv[++i];
-        else if (f == "--port" && has_value) a.port = static_cast<int>(parse_int(f, argv[++i], 1, 65535));
-        else if (f == "--threads" && has_value) a.threads = static_cast<int>(parse_int(f, argv[++i], 0, 1024));
-        else if (f == "--verbose") a.verbose = true;
-        else if (f == "--max-image-bytes" && has_value) a.max_image_bytes = parse_int(f, argv[++i], 1024, 256ll << 20);
-        else if (f == "--max-image-pixels" && has_value) {
-            a.max_image_pixels = parse_int(f, argv[++i], 1, 16384ll * 16384);
-        } else if (f == "--decode-budget-factor" && has_value) {
-            a.decode_budget_factor = parse_int(f, argv[++i], 4, 64);
-        } else if (f == "--max-decode-bytes" && has_value) {
-            a.max_decode_bytes = parse_int(f, argv[++i], 16ll << 20, 4ll << 30);
-        } else if (f == "--max-concurrent-decodes" && has_value) {
-            a.max_concurrent_decodes = static_cast<int>(parse_int(f, argv[++i], 1, 2));
-        } else if (f == "--http-threads" && has_value) {
-            a.http_threads = static_cast<int>(parse_int(f, argv[++i], 2, 16));
+        const std::string f = argv[i];
+        if (f == "--verbose") {
+            a.verbose = true;
+            continue;
         }
+        static const std::set<std::string> kValued = {
+            "--model-path", "--port", "--threads", "--max-image-bytes", "--max-image-pixels",
+            "--decode-budget-factor", "--max-decode-bytes", "--max-concurrent-decodes", "--http-threads"};
+        if (!kValued.count(f)) throw std::runtime_error("unknown argument '" + f + "'\n" + kUsage);
+        if (i + 1 >= argc) throw std::runtime_error(f + " needs a value\n" + kUsage);
+        const char* v = argv[++i];
+        if (f == "--model-path") a.model_path = v;
+        else if (f == "--port") a.port = static_cast<int>(parse_int(f, v, 1, 65535));
+        else if (f == "--threads") a.threads = static_cast<int>(parse_int(f, v, 0, 1024));
+        else if (f == "--max-image-bytes") a.max_image_bytes = parse_int(f, v, 1024, 256ll << 20);
+        else if (f == "--max-image-pixels") a.max_image_pixels = parse_int(f, v, 1, 16384ll * 16384);
+        else if (f == "--decode-budget-factor") a.decode_budget_factor = parse_int(f, v, 4, 64);
+        else if (f == "--max-decode-bytes") a.max_decode_bytes = parse_int(f, v, 16ll << 20, 4ll << 30);
+        else if (f == "--max-concurrent-decodes") a.max_concurrent_decodes = static_cast<int>(parse_int(f, v, 1, 2));
+        else if (f == "--http-threads") a.http_threads = static_cast<int>(parse_int(f, v, 2, 16));
     }
     if (a.model_path.empty() || a.port == 0) throw std::runtime_error(kUsage);
     return a;
@@ -735,7 +740,7 @@ void read_image_request(const httplib::Request& req, const httplib::Response& re
                         bytes.append(d, n);
                     }
                 } else if (cur == Part::TopK && top_k_field.size() < 16) {
-                    top_k_field.append(d, std::min<size_t>(n, 16));
+                    top_k_field.append(d, std::min<size_t>(n, 16 - top_k_field.size()));
                 }
                 return true;
             });
@@ -844,6 +849,8 @@ int main(int argc, char** argv) {
                              "ort-server: warning: --decode-budget-factor x --max-image-pixels exceeds "
                              "--max-decode-bytes; images near the pixel cap may fail the decode budget\n");
             }
+        } else {
+            srv.set_payload_max_length(kPayloadMax);
         }
 
         srv.Get("/health", [&](const httplib::Request&, httplib::Response& res) {
