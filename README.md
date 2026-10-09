@@ -115,7 +115,7 @@ with `tools/zero_shot_router/export.py`.
 | Method | Path | Body | Response |
 |--------|------|------|----------|
 | GET | `/health` | — | `200` when the model is loaded and ready: `{"status": "ok", "version": "<ort-server>", "onnxruntime": "<ORT>"}` |
-| POST | `/classify` | `{"text": "...", "top_k": N?, "labels": [...]?}` | `{"labels": {"<label>": <score in [0,1]>, ...}, "truncated": <bool>}` — `top_k` omitted or `0` returns all labels |
+| POST | `/classify` | `{"text": "...", "top_k": N?, "labels": [...]?}` | `{"labels": {"<label>": <score in [0,1]>, ...}, "truncated": <bool>}` — `top_k` omitted or `0` returns all labels; a body over the cap (64 KiB; for a zero-shot model 16 MiB plus room for its label limits) is `413` |
 | POST | `/classify/image` | multipart (`image` or `file` part, optional `top_k`) or `{"image": "<base64 or data: URL>", "top_k": N?}` | `{"predictions": [{"index", "label", "score"}], "labels": {...}, "input": {"width", "height"}, "timings": {...}}` (image models; tflite-server's contract, `400`/`413`/`503` on bad, oversized or busy requests) |
 
 `labels` is required for a `zero-shot-classification` model and rejected for any

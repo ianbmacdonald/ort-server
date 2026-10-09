@@ -116,6 +116,10 @@ struct LimitOverrides {
 constexpr long long kMaxTopK = 1000000;
 constexpr auto kAdmissionWait = std::chrono::seconds(30);
 constexpr auto kSocketTimeout = std::chrono::seconds(5);
+// Text request body cap: cpp-httplib's default is unlimited, and the whole body is
+// buffered before the handler runs. The token window is 512, so 64 KiB is ample.
+constexpr size_t kPayloadMax = 64 * 1024;
+constexpr size_t kZeroShotTextMax = 16u << 20;
 
 struct Args {
     std::string model_path;
@@ -723,6 +727,17 @@ size_t tail_chars_for(const Encoded& t, size_t budget, size_t total_chars) {
 
 class Model {
 public:
+    // Request body cap. The zero-shot path keeps the head and tail of a text of
+    // any length (upstream answers a 5 MB text), so its cap is kZeroShotTextMax
+    // plus room for the label list: up to max_labels x max_label_chars
+    // characters, each at most 6 bytes as a JSON \uXXXX escape.
+    size_t payload_max() const {
+        if (!manifest_.zero_shot()) return kPayloadMax;
+        const unsigned long long labels = static_cast<unsigned long long>(manifest_.max_labels) *
+                                          (6ull * static_cast<unsigned long long>(manifest_.max_label_chars) + 4);
+        return static_cast<size_t>(std::min<unsigned long long>(kZeroShotTextMax + labels, 64ull << 20));
+    }
+
     Model(const fs::path& dir, int threads, bool verbose, const LimitOverrides& cli = {})
         : env_(ORT_LOGGING_LEVEL_WARNING, "ort-server"), verbose_(verbose) {
         std::string blob = load_bytes(dir / "tokenizer.json");
@@ -1374,7 +1389,7 @@ void read_image_request(const httplib::Request& req, const httplib::Response& re
                         bytes.append(d, n);
                     }
                 } else if (cur == Part::TopK && top_k_field.size() < 16) {
-                    top_k_field.append(d, std::min<size_t>(n, 16));
+                    top_k_field.append(d, std::min<size_t>(n, 16 - top_k_field.size()));
                 }
                 return true;
             });
@@ -1483,6 +1498,8 @@ int main(int argc, char** argv) {
                              "ort-server: warning: --decode-budget-factor x --max-image-pixels exceeds "
                              "--max-decode-bytes; images near the pixel cap may fail the decode budget\n");
             }
+        } else {
+            srv.set_payload_max_length(text_model->payload_max());
         }
 
         srv.Get("/health", [&](const httplib::Request&, httplib::Response& res) {

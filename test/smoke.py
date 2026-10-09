@@ -7,7 +7,8 @@ tools/zero_shot_router/export.py, checked against test/golden/.
 
 Covers: softmax/sigmoid normalization, manifest-less config.json inference,
 token-classification max/mean aggregation, truncation, top_k, request
-validation (400s), startup rejection of bad manifests, the output-dim
+validation (400s), the text body cap (413), startup rejection of bad
+manifests and of unknown or valueless flags, the output-dim
 guard, and /classify/image on an NCHW image model. Stdlib only, so it runs on
 any CI runner.
 """
@@ -321,6 +322,20 @@ def main():
         st, body = request({"input": "hello world"})
         check("A: 'input' alias works", st == 200 and len(scores_of(body)) == 2)
         check_golden(clf, "A: GOLDEN seq-cls")
+        st, body = request({"text": "word " * 12000})
+        check("A: 60 KB text under the body cap is 200", st == 200, str(body)[:200])
+        st, _ = request({"text": "word " * 14000})
+        check("A: text body over the 64 KiB cap is 413", st == 413, f"status {st}")
+
+    # A1: unknown flags and flags without a value are startup errors.
+    for extra, name in [
+        (["--max-concurrent-decode", "2"], "A1: unknown argument rejected"),
+        (["--threads"], "A1: flag without a value rejected"),
+    ]:
+        with Server(binary, clf, extra) as s:
+            ready = s.wait_ready(timeout=10)
+            out = s.stop()
+            check(name, not ready and ("unknown argument" in out or "needs a value" in out), out[-200:])
 
     # A2: a tokenizer.json with PADDING enabled (as real HF repos ship) must
     # produce identical scores — the pad ids must never reach the model.
