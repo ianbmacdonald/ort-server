@@ -176,7 +176,7 @@ image models also take tflite-server's `--max-image-bytes`, `--max-image-pixels`
 
 CMake fetches ONNX Runtime, cpp-httplib, and nlohmann/json (see `CMakeLists.txt`) and builds `third_party/tok_ffi` in-tree. `tok_ffi` is a Rust static lib, so **cargo/rustup must be on PATH** to build ort-server from source (build-time only — users of the prebuilt binary need nothing).
 
-## musl gateway builds: default (curated + decision models) or full
+## musl gateway builds: default (curated + zero-shot models), decision (opt-in) or full
 
 The prplOS (musl) releases ship an ONNX Runtime 1.31.1 shared library built from source with
 `tools/ort-musl-build.sh <x86_64|aarch64> <ops|full> <build-dir>` (patches in `patches/musl/`, every fetched
@@ -186,8 +186,10 @@ source in [DEPENDENCIES.md](DEPENDENCIES.md)):
   only): the curated set of the v0.2.x-musl releases (`ops/curated.required_operators.config`: the six use
   cases of the gateway study, 17 models, and the BERT family of `ops/bertfamily.required_operators.config`)
   widened with every operator of the GLiClass zero-shot models (gliclass-edge-v3.0, gliclass-modern-base-v3.0,
-  gliclass-modern-large-v3.0), the decision models Julia-1 and Laya, and the LFM2 zero-shot router. A model
-  needing another operator fails to load and ONNX Runtime names the missing kernel.
+  gliclass-modern-large-v3.0) and the LFM2 zero-shot router. A model needing another operator fails to load
+  and ONNX Runtime names the missing kernel.
+- **decision** (opt-in), `ops/decision.required_operators.config`: the default plus the four entries the decision
+  models Julia-1 and Laya need (`GatherElements`, `IsNaN`, `Max`, `GreaterOrEqual`).
 - **full**, `full` in place of the config: every ONNX and contrib operator and the ML ops; it also loads
   `.onnx`.
 
@@ -199,8 +201,9 @@ source in [DEPENDENCIES.md](DEPENDENCIES.md)):
 `tools/package-musl.sh` makes the release archive. `ORT_SERVER_GC_SECTIONS` (default ON on Linux) compiles with
 `-ffunction-sections -fdata-sections` and links with `--gc-sections`.
 
-Julia-1 and Laya load and run in the default library, but their graphs take decision-head inputs
-(`marker_pos`, `marker_mask`, `qtype`) that ort-server's HTTP contract does not build yet; GLiClass models run
+Julia-1 and Laya are opt-in because their graphs take decision-head inputs (`marker_pos`, `marker_mask`,
+`qtype`) that ort-server's HTTP contract does not build yet, so `/classify` cannot serve them; the default library
+refuses them at load. GLiClass models run
 through `text-classification` with the labels in the text (`<<LABEL>>a<<LABEL>>b<<SEP>>text`, sigmoid, a
 fixed label count per `manifest.json`).
 
