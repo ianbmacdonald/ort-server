@@ -34,8 +34,15 @@
 #include "image_model.h"
 #include "image_preprocess.h"
 
+#ifndef _WIN32
+#include <pthread.h>
+
+#include <csignal>
+#endif
+
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -51,6 +58,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -123,6 +131,7 @@ constexpr size_t kZeroShotTextMax = 16u << 20;
 
 struct Args {
     std::string model_path;
+    std::string host = "127.0.0.1";
     int port = 0;
     int threads = 0;  // 0: ONNX Runtime sizes (and pins) its own pool
     bool verbose = false;
@@ -154,7 +163,7 @@ long long positive_arg(const std::string& flag, const char* raw,
 }
 
 constexpr const char* kUsage =
-    "usage: ort-server --model-path <dir> --port <n> [--threads N] [--verbose]\n"
+    "usage: ort-server --model-path <dir> --port <n> [--host ADDR] [--threads N] [--verbose]\n"
     "       [--max-length <n>] [--max-labels <n>] [--max-label-chars <n>]\n"
     "       [--max-grid-cells <n>]\n"
     "  image models: [--max-image-bytes N] [--max-image-pixels N] [--max-concurrent-decodes 1..2]\n"
@@ -177,6 +186,7 @@ Args parse_args(int argc, char** argv) {
         };
         if (f == "--model-path") a.model_path = value();
         else if (f == "--port") a.port = static_cast<int>(positive_arg(f, value(), 65535));
+        else if (f == "--host") a.host = value();
         else if (f == "--threads") a.threads = static_cast<int>(positive_arg(f, value(), 1024));
         else if (f == "--verbose") a.verbose = true;
         else if (f == "--max-length")
@@ -204,7 +214,7 @@ Args parse_args(int argc, char** argv) {
             a.http_threads = static_cast<int>(positive_arg(f, value(), 16, 2));
         else throw std::runtime_error("unknown argument '" + f + "'\n" + kUsage);
     }
-    if (a.model_path.empty() || a.port == 0) throw std::runtime_error(kUsage);
+    if (a.model_path.empty() || a.port == 0 || a.host.empty()) throw std::runtime_error(kUsage);
     return a;
 }
 
@@ -1459,11 +1469,53 @@ void read_image_request(const httplib::Request& req, const httplib::Response& re
     }
     throw InvalidInput("cannot read the request body (malformed multipart or truncated)");
 }
+#ifndef _WIN32
+// Blocked before any thread starts, so every thread inherits the mask and only
+// SignalStop's waiter receives them.
+sigset_t block_stop_signals() {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGTERM);
+    sigaddset(&set, SIGINT);
+    if (pthread_sigmask(SIG_BLOCK, &set, nullptr) != 0) throw std::runtime_error("cannot block SIGTERM");
+    return set;
+}
+
+// In a container the engine is PID 1, where a signal with no handler is
+// ignored, so without this a stop waits out the runtime's SIGKILL timeout.
+class SignalStop {
+public:
+    SignalStop(httplib::Server& srv, const sigset_t& set) : set_(set) {
+        waiter_ = std::thread([this, &srv] {
+            int sig = 0;
+            sigwait(&set_, &sig);
+            // A signal during startup arrives before listen() binds.
+            while (!srv.is_running() && !done_) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            srv.stop();
+        });
+    }
+    ~SignalStop() {
+        done_ = true;
+        pthread_kill(waiter_.native_handle(), SIGTERM);
+        waiter_.join();
+    }
+    SignalStop(const SignalStop&) = delete;
+    SignalStop& operator=(const SignalStop&) = delete;
+
+private:
+    sigset_t set_;
+    std::atomic<bool> done_{false};
+    std::thread waiter_;
+};
+#endif
 
 }  // namespace
 
 int main(int argc, char** argv) {
     try {
+#ifndef _WIN32
+        const sigset_t stop_signals = block_stop_signals();
+#endif
         Args args = parse_args(argc, argv);
         std::unique_ptr<Model> text_model;
         std::unique_ptr<ImageModel> image;
@@ -1586,8 +1638,11 @@ int main(int argc, char** argv) {
             }
         });
 
-        if (!srv.listen("127.0.0.1", args.port)) {
-            fprintf(stderr, "ort-server: failed to bind 127.0.0.1:%d\n", args.port);
+#ifndef _WIN32
+        SignalStop signal_stop(srv, stop_signals);
+#endif
+        if (!srv.listen(args.host, args.port)) {
+            fprintf(stderr, "ort-server: failed to bind %s:%d\n", args.host.c_str(), args.port);
             return 1;
         }
         return 0;

@@ -154,7 +154,7 @@ cmake --build build --config Release
 ./build/ort-server --model-path <model-dir> --port 8100
 ```
 
-Usage: `ort-server --model-path <dir> --port <n> [--threads N] [--verbose]` (plus the zero-shot limit flags below);
+Usage: `ort-server --model-path <dir> --port <n> [--host ADDR] [--threads N] [--verbose]` (plus the zero-shot limit flags below);
 image models also take tflite-server's `--max-image-bytes`, `--max-image-pixels`, `--max-concurrent-decodes`,
 `--decode-budget-factor`, `--max-decode-bytes` and `--http-threads`, with its defaults.
 
@@ -164,6 +164,10 @@ image models also take tflite-server's `--max-image-bytes`, `--max-image-pixels`
 - Socket timeouts: a connection that sends nothing for 5 s while a request is being read, or
   accepts nothing for 5 s while a response is written, is closed (cpp-httplib's read and write
   timeouts, set explicitly). It is a per-read idle limit, not a cap on a request's total time.
+- `--host ADDR`: the address to listen on (default `127.0.0.1`); `0.0.0.0` serves the LAN or a
+  container network.
+- SIGTERM and SIGINT stop the server cleanly (exit 0), also as PID 1 in a container, where a
+  signal without a handler is ignored (not on Windows).
 - `--threads N`: number of CPU threads for inference (default: ONNX Runtime sizes its pool to
   the machine). Without it ONNX Runtime starts a worker per CPU it detects and pins each to its
   own CPU, ignoring a `taskset`/cpuset mask. With `--threads N` the session uses N intra-op
