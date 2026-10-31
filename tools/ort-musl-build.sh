@@ -1,20 +1,23 @@
 #!/bin/bash
-# Build ONNX Runtime 1.30.0 (shared library, CPU EP) for prplOS 5.1 musl, on the ai4 build host layout.
+# Build ONNX Runtime (shared library, CPU EP) for prplOS 5.1 musl, on the ai4 build host layout.
 #
 #   tools/ort-musl-build.sh <x86_64|aarch64> <required_operators.config | full> <build-dir>
 #
 # <config>: a --minimal_build (ORT-format models only) with exactly the operators in the config, reduced
-#   operator type support, no ML ops, as the v0.1.x releases. Make a config from your models with
-#   tools/ort-ops-config.sh. patches/ort-minimal-keep-x86-dispatch.patch must be applied to the source.
+#   operator type support, no ML ops. The release default is ops/default.required_operators.config; make a
+#   config for your own models with tools/ort-ops-config.sh.
 # full: a standard build (every ONNX and contrib operator, ML ops, loads .onnx and .ort).
 #
-# Inputs ($R, default ~/build-litert): onnxruntime-src (or $ORT_SRC) at v1.30.0 with the patch applied, the
-# prplOS 5.1 staging trees, tflite-venv (python for build.py). The prplOS sysroot's protobuf 3.17.3 must be
+# Inputs ($R, default ~/build-litert): the prplOS 5.1 staging trees and tflite-venv (python for build.py);
+# $ORT_SRC (default $R/onnxruntime-src): ONNX Runtime $ORT_VERSION (default 1.31.1, tag v1.31.1 = 6af1a93)
+# with every patches/musl/onnxruntime/*.patch applied (git am). The prplOS sysroot's protobuf 3.17.3 must be
 # moved out first (ORT would find it and fail against its newer protoc); this script only checks.
+# Offline: ORT's cmake/deps.txt takes local file paths in place of its URLs (see DEPENDENCIES.md).
 # Run it inside a memory guard, e.g. systemd-run --user --scope -p MemoryMax=10G -p MemorySwapMax=0.
 set -euo pipefail
 ARCH=$1; OPS=$2; B=$(readlink -f "$3")
 R=${R:-$HOME/build-litert}; SRC=${ORT_SRC:-$R/onnxruntime-src}; JOBS=${JOBS:-8}
+ORT_VERSION=${ORT_VERSION:-1.31.1}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 if [ "$ARCH" = aarch64 ]; then
   SD=$R/prplos-5.1-staging-aarch64; S=$SD/target-aarch64_cortex-a53_musl
@@ -33,9 +36,10 @@ export STAGING_DIR=$SD
 if ls -d "$S"/usr/include/google/protobuf "$S"/usr/lib/libprotobuf.* >/dev/null 2>&1; then
   echo "protobuf is in the sysroot $S; move it out first (see the comment above)" >&2; exit 1
 fi
-[ "$(cat "$SRC/VERSION_NUMBER")" = 1.30.0 ] || { echo "$SRC is not ONNX Runtime 1.30.0" >&2; exit 1; }
-git -C "$SRC" apply --reverse --check "$HERE/patches/ort-minimal-keep-x86-dispatch.patch" ||
-  { echo "apply patches/ort-minimal-keep-x86-dispatch.patch to $SRC first" >&2; exit 1; }
+[ "$(cat "$SRC/VERSION_NUMBER")" = "$ORT_VERSION" ] || { echo "$SRC is not ONNX Runtime $ORT_VERSION" >&2; exit 1; }
+for p in "$HERE"/patches/musl/onnxruntime/*.patch; do
+  git -C "$SRC" apply --reverse --check "$p" || { echo "apply $p to $SRC first (git am)" >&2; exit 1; }
+done
 if [ "$OPS" = full ]; then
   MODE=()
 else
