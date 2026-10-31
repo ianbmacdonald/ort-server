@@ -176,25 +176,33 @@ image models also take tflite-server's `--max-image-bytes`, `--max-image-pixels`
 
 CMake fetches ONNX Runtime, cpp-httplib, and nlohmann/json (see `CMakeLists.txt`) and builds `third_party/tok_ffi` in-tree. `tok_ffi` is a Rust static lib, so **cargo/rustup must be on PATH** to build ort-server from source (build-time only — users of the prebuilt binary need nothing).
 
-## musl gateway builds: curated (default) or general
+## musl gateway builds: default (curated + decision models) or full
 
-The prplOS (musl) releases ship a minimal ONNX Runtime 1.30.0 shared library built with
-`tools/ort-musl-build.sh <x86_64|aarch64> <ops> <build-dir>` (ORT-format `model.ort` models only):
+The prplOS (musl) releases ship an ONNX Runtime 1.31.1 shared library built from source with
+`tools/ort-musl-build.sh <x86_64|aarch64> <ops|full> <build-dir>` (patches in `patches/musl/`, every fetched
+source in [DEPENDENCIES.md](DEPENDENCIES.md)):
 
-- **curated** (the release default), `ops/curated.required_operators.config`: 60 operators, the
-  union of every model of the six use cases of the gateway study (text classification, sentence
-  embeddings, image classification incl. MobileNetV2, object detection, audio, time series; 17
-  models) and the v0.1.x BERT-family set (`ops/bertfamily.required_operators.config`: BERT,
-  DistilBERT, RoBERTa, DeBERTa v1/v2, ELECTRA, ALBERT, ModernBERT). A model needing another
-  operator fails to load and ONNX Runtime names the missing kernel.
-- **general**, `full` in place of the config: every ONNX and contrib operator and the ML ops; it
-  also loads `.onnx`.
+- **default**, `ops/default.required_operators.config` (a `--minimal_build`, ORT-format `model.ort` models
+  only): the curated set of the v0.2.x-musl releases (`ops/curated.required_operators.config`: the six use
+  cases of the gateway study, 17 models, and the BERT family of `ops/bertfamily.required_operators.config`)
+  widened with every operator of the GLiClass zero-shot models (gliclass-edge-v3.0, gliclass-modern-base-v3.0,
+  gliclass-modern-large-v3.0), the decision models Julia-1 and Laya, and the LFM2 zero-shot router. A model
+  needing another operator fails to load and ONNX Runtime names the missing kernel.
+- **full**, `full` in place of the config: every ONNX and contrib operator and the ML ops; it also loads
+  `.onnx`.
 
-`tools/ort-ops-config.sh <dir>` converts your `.onnx` models and writes their config, to build
-for your own set. The server links against the library with `-DORT_SERVER_ORT_ROOT=<include/,lib/>`
-and a prebuilt musl tokenizer shim (`-DORT_SERVER_TOKENIZERS_C_LIB`). `ORT_SERVER_GC_SECTIONS`
-(default ON on Linux) compiles with `-ffunction-sections -fdata-sections` and links with
-`--gc-sections`.
+`tools/ort-ops-config.sh <dir>` converts your `.onnx` models (onnxruntime 1.31.1,
+`--optimization_style Runtime`) and writes their config, to build for your own set. Convert an old-opset export
+(opset 11, say) to a recent opset first (`onnx.version_converter`), or it needs the old kernels.
+`tools/ort-server-musl-build.sh <arch> <ort-build-dir> <build-dir>` builds the server against it
+(`-DORT_SERVER_ORT_ROOT`, and `-DORT_SERVER_TOK_FFI_TARGET=<rust musl triple>` for the tokenizer);
+`tools/package-musl.sh` makes the release archive. `ORT_SERVER_GC_SECTIONS` (default ON on Linux) compiles with
+`-ffunction-sections -fdata-sections` and links with `--gc-sections`.
+
+Julia-1 and Laya load and run in the default library, but their graphs take decision-head inputs
+(`marker_pos`, `marker_mask`, `qtype`) that ort-server's HTTP contract does not build yet; GLiClass models run
+through `text-classification` with the labels in the text (`<<LABEL>>a<<LABEL>>b<<SEP>>text`, sigmoid, a
+fixed label count per `manifest.json`).
 
 ## Releases
 
