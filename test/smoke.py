@@ -8,7 +8,8 @@ tools/zero_shot_router/export.py, checked against test/golden/.
 Covers: softmax/sigmoid normalization, manifest-less config.json inference,
 token-classification max/mean aggregation, truncation, top_k, request
 validation (400s), the text body cap (413), startup rejection of bad
-manifests and of unknown or valueless flags, the output-dim
+manifests and of unknown or valueless flags, a clean exit on SIGTERM/SIGINT,
+--host, the output-dim
 guard, and /classify/image on an NCHW image model. Stdlib only, so it runs on
 any CI runner.
 """
@@ -17,6 +18,7 @@ import argparse
 import base64
 import json
 import math
+import os
 import re
 import shutil
 import struct
@@ -30,7 +32,7 @@ import zlib
 from pathlib import Path
 
 HERE = Path(__file__).parent
-PORT = 8231
+PORT = int(os.environ.get("ORT_SERVER_SMOKE_PORT", "8231"))
 BASE = f"http://127.0.0.1:{PORT}"
 FAILURES = []
 
@@ -925,6 +927,33 @@ def main():
             ready = s.wait_ready(timeout=10)
             out = s.stop()
             check(name, not ready, out[-200:])
+
+    # Q: SIGTERM and SIGINT stop the server promptly with exit 0 (POSIX only);
+    # --host binds the given address and an empty one is a startup error.
+    if os.name == "posix":
+        import signal
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            with Server(binary, clf) as s:
+                check(f"Q: server ready for {sig.name}", s.wait_ready())
+                t0 = time.time()
+                s.proc.send_signal(sig)
+                try:
+                    rc = s.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    rc = None
+                dt = time.time() - t0
+                check(
+                    f"Q: {sig.name} exits 0 within 2 s",
+                    rc == 0 and dt < 2,
+                    f"rc={rc} after {dt:.2f}s",
+                )
+    with Server(binary, clf, ["--host", "127.0.0.1"]) as s:
+        check("Q: --host 127.0.0.1 ready", s.wait_ready())
+    with Server(binary, clf, ["--host", ""]) as s:
+        ready = s.wait_ready(timeout=10)
+        out = s.stop()
+        check("Q: empty --host rejected", not ready, out[-200:])
 
     if args.router_dir:
         check_real_router(binary, args.router_dir)
